@@ -9,9 +9,11 @@ It can:
 
 ![screenshot of the app](eego_lsl_app/screenshot.png)
 
-## Python version
+## Requirements
 
-This package is configured for the included 64-bit `eego-SDK.dll`, so use normal 64-bit Python 3.13 on Windows.
+This app talks to an **EdigRPC (EDI 2.0) server** over gRPC -- it no longer loads the eego SDK DLL
+directly. Start the EDI gRPC server (EdigRPCApp / EDX-Service-TinyUI) first, then run this app;
+by default it connects to `localhost:3390` (configurable in the GUI).
 
 ```bat
 py -3.13 -m pip install -r requirements.txt
@@ -61,9 +63,10 @@ Pressing **Stop** now requests a full SDK stream close, which should also releas
 
 ## Notes
 
-- The SDK usually permits only one active stream from the amplifier at a time, so impedance and EEG are treated as mutually exclusive modes.
-- EEG values are assumed to come from the SDK in volts and are converted to microvolts before display/LSL streaming.
-- If the app cannot load the SDK, make sure the ANT/eego runtime and license are installed correctly.
+- The amplifier's SDK typically permits only one active mode at a time, so impedance and EEG are treated as mutually exclusive.
+- EEG values are converted to microvolts before display/LSL streaming based on each channel's reported unit.
+- "Detect amplifier" always cascades every device the server reports into a single stream (never a user-selected subset).
+- If the app cannot connect, make sure the EdigRPC server is running and reachable at the configured address.
 
 ## Realtime display filter
 

@@ -1,2 +1,4 @@
 pylsl>=1.17.6
 openpyxl>=3.1.5
+grpcio>=1.60.0
+protobuf>=5.26.1

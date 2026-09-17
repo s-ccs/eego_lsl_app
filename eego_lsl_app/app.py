@@ -9,7 +9,7 @@ from collections import deque
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from eego_sdk import EegoSdk
+from edi_sdk import DEFAULT_CHANNEL_ADDRESS, EdiSdk, EdiSdkError, channels_available, sampling_rates_available
 from layout import Electrode, auxiliary_contacts, impedance_contacts, load_layout, normalize_to_canvas, reference_electrodes
 from workers import StreamWorker, WorkerConfig
 from firewall import add_firewall_rules, ensure_firewall_rule_interactive
@@ -42,6 +42,7 @@ class EegoLslApp(tk.Tk):
         # Auxiliary contacts shown in the upper-left of the topomap for 64-channel caps.
         # These are not part of the 64 EEG reference channels; they are display/status contacts.
         self.aux_channel_names = ["EOG", "REF", "GND"]
+        self.devices = []  # all DeviceInfo currently reported by the EdigRPC server
         self.last_values: dict[str, float] = {}
         # Topomap colours are based only on impedance values. EEG voltage is never used for colouring.
         self.last_impedance_values: dict[str, float] = {}
@@ -53,7 +54,6 @@ class EegoLslApp(tk.Tk):
         self.filter_signature: tuple | None = None
         self.last_signal_redraw_time = 0.0
         self.signal_redraw_interval_s = 0.16
-        self.amplifiers = []
         self.worker: StreamWorker | None = None
         self.queue: queue.Queue = queue.Queue()
         self.battery_var = tk.StringVar(value="Battery: unavailable")
@@ -88,11 +88,14 @@ class EegoLslApp(tk.Tk):
         controls = ttk.Frame(root)
         controls.pack(fill=tk.X)
 
-        ttk.Button(controls, text="Detect amplifier", command=self.detect_amplifiers).grid(row=0, column=0, padx=4, pady=4)
-        self.amp_combo = ttk.Combobox(controls, state="readonly", width=34)
-        self.amp_combo.grid(row=0, column=1, padx=4, pady=4)
+        ttk.Label(controls, text="Server address").grid(row=0, column=0, padx=4, pady=4, sticky=tk.E)
+        self.server_address_var = tk.StringVar(value=DEFAULT_CHANNEL_ADDRESS)
+        ttk.Entry(controls, textvariable=self.server_address_var, width=20).grid(row=0, column=1, padx=4, pady=4, sticky=tk.W)
+        ttk.Button(controls, text="Detect amplifier", command=self.detect_amplifiers).grid(row=0, column=2, padx=4, pady=4)
+        self.amp_label_var = tk.StringVar(value="No amplifier detected")
+        ttk.Label(controls, textvariable=self.amp_label_var).grid(row=0, column=3, padx=4, pady=4, sticky=tk.W)
 
-        ttk.Label(controls, text="Display / stream").grid(row=0, column=2, padx=(20, 4), sticky=tk.E)
+        ttk.Label(controls, text="Display / stream").grid(row=0, column=4, padx=(20, 4), sticky=tk.E)
         self.mode_var = tk.StringVar(value="Impedance (kΩ)")
         self.mode_combo = ttk.Combobox(
             controls,
@@ -101,12 +104,12 @@ class EegoLslApp(tk.Tk):
             textvariable=self.mode_var,
             values=("Impedance (kΩ)", "EEG activity (µV)"),
         )
-        self.mode_combo.grid(row=0, column=3, padx=4, pady=4, sticky=tk.W)
+        self.mode_combo.grid(row=0, column=5, padx=4, pady=4, sticky=tk.W)
         self.mode_combo.bind("<<ComboboxSelected>>", lambda _event: self._mode_changed())
 
-        ttk.Label(controls, text="Sampling rate").grid(row=0, column=4, padx=(20, 4), sticky=tk.E)
+        ttk.Label(controls, text="Sampling rate").grid(row=0, column=6, padx=(20, 4), sticky=tk.E)
         self.sampling_rate_var = tk.StringVar(value="512")
-        ttk.Entry(controls, textvariable=self.sampling_rate_var, width=8).grid(row=0, column=5, padx=4, sticky=tk.W)
+        ttk.Entry(controls, textvariable=self.sampling_rate_var, width=8).grid(row=0, column=7, padx=4, sticky=tk.W)
 
         ttk.Label(controls, text="Green below kΩ").grid(row=1, column=0, padx=4, sticky=tk.E)
         self.good_ohm_var = tk.StringVar(value="10")
@@ -301,34 +304,40 @@ class EegoLslApp(tk.Tk):
             messagebox.showerror("Layout error", str(exc))
 
     def detect_amplifiers(self):
+        address = self.server_address_var.get().strip() or DEFAULT_CHANNEL_ADDRESS
         try:
-            with EegoSdk() as sdk:
-                self.amplifiers = sdk.amplifiers()
-                version = sdk.version()
-        except Exception as exc:
-            messagebox.showerror("eego SDK error", str(exc))
-            self.status_var.set("Could not load SDK or detect amplifier.")
+            sdk = EdiSdk(address)
+            devices = sdk.list_devices()
+        except EdiSdkError as exc:
+            messagebox.showerror("EdigRPC error", str(exc))
+            self.status_var.set("Could not connect to the EdigRPC server or detect amplifiers.")
             return
-        if not self.amplifiers:
-            self.amp_combo["values"] = []
+        self.devices = devices
+        if not devices:
+            self.amp_label_var.set("No amplifier detected")
             self.status_var.set("No amplifier detected.")
             return
-        values = [f"{a.serial} | id={a.id}" for a in self.amplifiers]
-        self.amp_combo["values"] = values
-        self.amp_combo.current(0)
-        self.status_var.set(f"Detected {len(self.amplifiers)} amplifier(s). SDK version: {version}")
+        serials = ", ".join(d.Serial or d.Key for d in devices)
+        self.amp_label_var.set(f"Detected {len(devices)}: {serials}")
+        try:
+            # Short-lived probe device -- always cascades every reported device,
+            # same as the real stream later -- disposed once it goes out of scope.
+            probe = sdk.create_device(devices)
+            n_ref = sum(1 for ch in channels_available(probe) if ch.is_referential)
+            rates = sorted({int(r) for r in sampling_rates_available(probe)})
+            probe = None
+        except EdiSdkError as exc:
+            self.log_msg(f"INFO: could not probe amplifier channel/rate details: {exc}")
+            n_ref, rates = None, []
+        ref_text = f", {n_ref} referential channel(s)" if n_ref is not None else ""
+        rate_text = f", rates={rates}" if rates else ""
+        self.status_var.set(f"Detected {len(devices)} amplifier(s) at {address}{ref_text}{rate_text}.")
         self.battery_var.set("Battery: unavailable")
-        self.log_msg("INFO: Battery percentage is not available through the bundled eego SDK C wrapper. "
-                     "Use the amplifier POWER LED as the fallback indicator: green=high, yellow=medium, red=low.")
-
-    def selected_amp(self):
-        idx = self.amp_combo.current()
-        if idx < 0 or idx >= len(self.amplifiers):
-            raise RuntimeError("No amplifier selected. Click 'Detect amplifier' first.")
-        return self.amplifiers[idx]
+        self.log_msg("INFO: Battery reporting is not implemented in this app yet.")
 
     def make_config(self) -> WorkerConfig:
-        amp = self.selected_amp()
+        if not self.devices:
+            raise RuntimeError("No amplifier detected. Click 'Detect amplifier' first.")
         if not self.electrodes:
             raise RuntimeError("Load an electrode layout first.")
         refs = reference_electrodes(self.electrodes)
@@ -337,20 +346,14 @@ class EegoLslApp(tk.Tk):
         selected_refs = refs[:64]
         if len(refs) > 64:
             self.log_msg(f"Using first 64 regular EEG reference electrodes; layout contains {len(refs)} reference entries.")
-        # Impedance/EEG mapping is based on the manual SDK reference order.
-        # For the 64-channel waveguard layout, EOG is Ref 32 and is therefore
-        # included in selected_refs. REF/GND are separate contacts.
-        imp_names = [e.name for e in selected_refs]
-        eog_contacts = [e for e in selected_refs if e.name.upper() == "EOG"]
+        serial = "+".join(d.Serial or d.Key for d in self.devices)
         return WorkerConfig(
-            amplifier_id=amp.id,
-            serial=amp.serial or str(amp.id),
+            channel_address=self.server_address_var.get().strip() or DEFAULT_CHANNEL_ADDRESS,
+            serial=serial,
             channel_names=[e.name for e in selected_refs],
             sampling_rate=int(self.sampling_rate_var.get()),
             stream_lsl=True,
             selected_reference_count=len(selected_refs),
-            eog_channel_name=eog_contacts[0].name if eog_contacts else None,
-            impedance_channel_names=imp_names,
         )
 
     def start_selected_stream(self):
@@ -418,9 +421,7 @@ class EegoLslApp(tk.Tk):
         elif typ == "eeg_block":
             self._update_signal_block(msg.get("names", []), msg.get("samples", []), unit="µV")
         elif typ == "trigger":
-            sc = msg.get("sample_counter")
-            suffix = f" at sample_counter={sc}" if sc is not None else ""
-            text = f"TRIGGER: code {msg.get('code')} from SDK column {msg.get('column')}{suffix}"
+            text = f"TRIGGER: code {msg.get('code')}"
             self.log_msg(text)
             self.status_var.set(text)
         elif typ == "info":
