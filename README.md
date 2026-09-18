@@ -1,3 +1,6 @@
+!!! important
+  This is work in progress, have a look at the most up-to-date branch. No guarantees whatsoever!
+
 Tkinter-based Python app for ANT eego amplifiers.
 
 It can:
