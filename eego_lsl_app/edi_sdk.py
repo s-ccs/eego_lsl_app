@@ -35,6 +35,14 @@ class Channel:
     def is_referential(self) -> bool:
         return self.polarity == eg.ChannelPolarity.Referential
 
+    @property
+    def is_bipolar(self) -> bool:
+        return self.polarity == eg.ChannelPolarity.Bipolar
+
+    @property
+    def is_auxiliary(self) -> bool:
+        return self.polarity == eg.ChannelPolarity.Auxiliary
+
 
 class EdiSdk:
     """Connects to an EdigRPC server and lists/creates the cascaded amplifier device."""

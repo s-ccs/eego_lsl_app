@@ -5,13 +5,15 @@ It can:
 - load an electrode layout (`.txt`, `.csv`, `.tsv`, `.json`),
 - detect connected eego amplifiers,
 - stream either impedance values or EEG activity to LSL,
-- display electrode impedance on a topomap and EEG values numerically/signal-viewer only.
+- display live electrode impedance on a topomap.
 
 ![screenshot of the app](screenshot.png)
 
-## Python version
+## Requirements
 
-This package is configured for the included 64-bit `eego-SDK.dll`, so use normal 64-bit Python 3.13 on Windows.
+This app talks to an **EdigRPC (EDI 2.0) server** over gRPC -- it no longer loads the eego SDK DLL
+directly. Start the EDI gRPC server (EdigRPCApp / EDX-Service-TinyUI) first, then run this app;
+by default it connects to `localhost:3390` (configurable in the GUI).
 
 ```bat
 py -3.13 -m pip install -r requirements.txt
@@ -33,19 +35,6 @@ The topomap uses three adjustable impedance bands. The defaults are:
 
 Change the two threshold boxes in the GUI and press **Apply thresholds**. The topomap and table update immediately for the latest impedance values.
 
-## Signal viewer
-
-The app now has two tabs: **Topomap** and **Signal viewer**. The signal viewer is written directly in Tkinter. It can display up to 64 channels.
-
-Controls in the signal viewer:
-- number of channels shown: 4, 8, 16, 32, 48, or 64;
-- display scale in µV/div;
-- optional high-pass filter, default `0.5 Hz`;
-- optional low-pass filter, default `40 Hz`;
-- optional notch filter: Off, 50 Hz, or 60 Hz.
-
-The realtime filter is **display-only**. The outgoing LSL EEG stream remains raw microvolt data.
-
 ## LSL modes
 
 Use the dropdown to choose:
@@ -54,6 +43,7 @@ Use the dropdown to choose:
 - `EEG activity (µV)`
 
 Then press **Start LSL Stream**. To change mode, press **Stop**, select the other mode, and start again.
+Only the impedance mode is shown live in the app; EEG activity is streamed straight to LSL with no in-app display.
 
 ## Stop behaviour
 
@@ -61,13 +51,10 @@ Pressing **Stop** now requests a full SDK stream close, which should also releas
 
 ## Notes
 
-- The SDK usually permits only one active stream from the amplifier at a time, so impedance and EEG are treated as mutually exclusive modes.
-- EEG values are assumed to come from the SDK in volts and are converted to microvolts before display/LSL streaming.
-- If the app cannot load the SDK, make sure the ANT/eego runtime and license are installed correctly.
-
-## Realtime display filter
-
-The signal viewer filter is only applied to the visual trace display. It does not alter the LSL stream. Press **Apply filter** after changing filter settings; this resets the viewer buffer and filter state.
+- The amplifier's SDK typically permits only one active mode at a time, so impedance and EEG are treated as mutually exclusive.
+- EEG values are converted to microvolts before LSL streaming based on each channel's reported unit.
+- "Detect amplifier" always cascades every device the server reports into a single stream (never a user-selected subset).
+- If the app cannot connect, make sure the EdigRPC server is running and reachable at the configured address.
 
 The app now checks on startup whether Windows Firewall rules exist for the program. If no rule is found, it asks whether to add inbound and outbound allow-rules for Private/Domain networks.
 

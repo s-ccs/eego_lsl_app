@@ -5,7 +5,7 @@ It can:
 - load an electrode layout (`.txt`, `.csv`, `.tsv`, `.json`),
 - detect connected eego amplifiers,
 - stream either impedance values or EEG activity to LSL,
-- display electrode impedance on a topomap and EEG values numerically/signal-viewer only.
+- display live electrode impedance on a topomap.
 
 ![screenshot of the app](eego_lsl_app/screenshot.png)
 
@@ -35,19 +35,6 @@ The topomap uses three adjustable impedance bands. The defaults are:
 
 Change the two threshold boxes in the GUI and press **Apply thresholds**. The topomap and table update immediately for the latest impedance values.
 
-## Signal viewer
-
-The app now has two tabs: **Topomap** and **Signal viewer**. The signal viewer is written directly in Tkinter. It can display up to 64 channels.
-
-Controls in the signal viewer:
-- number of channels shown: 4, 8, 16, 32, 48, or 64;
-- display scale in µV/div;
-- optional high-pass filter, default `0.5 Hz`;
-- optional low-pass filter, default `40 Hz`;
-- optional notch filter: Off, 50 Hz, or 60 Hz.
-
-The realtime filter is **display-only**. The outgoing LSL EEG stream remains raw microvolt data.
-
 ## LSL modes
 
 Use the dropdown to choose:
@@ -56,6 +43,7 @@ Use the dropdown to choose:
 - `EEG activity (µV)`
 
 Then press **Start LSL Stream**. To change mode, press **Stop**, select the other mode, and start again.
+Only the impedance mode is shown live in the app; EEG activity is streamed straight to LSL with no in-app display.
 
 ## Stop behaviour
 
@@ -64,13 +52,9 @@ Pressing **Stop** now requests a full SDK stream close, which should also releas
 ## Notes
 
 - The amplifier's SDK typically permits only one active mode at a time, so impedance and EEG are treated as mutually exclusive.
-- EEG values are converted to microvolts before display/LSL streaming based on each channel's reported unit.
+- EEG values are converted to microvolts before LSL streaming based on each channel's reported unit.
 - "Detect amplifier" always cascades every device the server reports into a single stream (never a user-selected subset).
 - If the app cannot connect, make sure the EdigRPC server is running and reachable at the configured address.
-
-## Realtime display filter
-
-The signal viewer filter is only applied to the visual trace display. It does not alter the LSL stream. Press **Apply filter** after changing filter settings; this resets the viewer buffer and filter state.
 
 The app now checks on startup whether Windows Firewall rules exist for the program. If no rule is found, it asks whether to add inbound and outbound allow-rules for Private/Domain networks.
 
