@@ -1,3 +1,4 @@
+
 Tkinter-based Python app for ANT eego amplifiers.
 
 It can:
@@ -9,20 +10,20 @@ It can:
 
 ![screenshot of the app](screenshot.png)
 
-## Python version
+## Install
+Be sure to have installed `python3-tk`
 
-This package is configured for the included 64-bit `eego-SDK.dll`, so use normal 64-bit Python 3.13 on Windows.
-
+then clone and run
 ```bat
-py -3.13 -m pip install -r requirements.txt
+uv init
+
 ```
 
 ## Run
 
 ```bat
-py -3.13 app.py
+uv run app.y
 ```
-
 ## Impedance colour scale
 
 The topomap uses three adjustable impedance bands. The defaults are:
@@ -31,20 +32,7 @@ The topomap uses three adjustable impedance bands. The defaults are:
 - **yellow:** `10–20 kΩ`
 - **red:** `> 20 kΩ`
 
-Change the two threshold boxes in the GUI and press **Apply thresholds**. The topomap and table update immediately for the latest impedance values.
-
-## Signal viewer
-
-The app now has two tabs: **Topomap** and **Signal viewer**. The signal viewer is written directly in Tkinter. It can display up to 64 channels.
-
-Controls in the signal viewer:
-- number of channels shown: 4, 8, 16, 32, 48, or 64;
-- display scale in µV/div;
-- optional high-pass filter, default `0.5 Hz`;
-- optional low-pass filter, default `40 Hz`;
-- optional notch filter: Off, 50 Hz, or 60 Hz.
-
-The realtime filter is **display-only**. The outgoing LSL EEG stream remains raw microvolt data.
+Change the two threshold boxes in the GUI and press **Apply thresholds**. The topomap and table update immediately for the latest impedance values.has two tabs: **Topomap** and **Signal viewer**. The signal viewer is written directly in Tkinter. It can display up to 64 channels.
 
 ## LSL modes
 
@@ -61,15 +49,10 @@ Pressing **Stop** now requests a full SDK stream close, which should also releas
 
 ## Notes
 
-- The SDK usually permits only one active stream from the amplifier at a time, so impedance and EEG are treated as mutually exclusive modes.
 - EEG values are assumed to come from the SDK in volts and are converted to microvolts before display/LSL streaming.
-- If the app cannot load the SDK, make sure the ANT/eego runtime and license are installed correctly.
 
-## Realtime display filter
-
-The signal viewer filter is only applied to the visual trace display. It does not alter the LSL stream. Press **Apply filter** after changing filter settings; this resets the viewer buffer and filter state.
-
-The app now checks on startup whether Windows Firewall rules exist for the program. If no rule is found, it asks whether to add inbound and outbound allow-rules for Private/Domain networks.
+## Windows Firewall
+The app checks on startup whether Windows Firewall rules exist for the program. If no rule is found, it asks whether to add inbound and outbound allow-rules for Private/Domain networks.
 
 Important details:
 
@@ -78,3 +61,4 @@ Important details:
 - The rules do not guarantee LSL visibility if the network itself blocks multicast/broadcast discovery, if the network profile is Public, if a VPN is active, or if a university/router firewall isolates devices.
 
 You can also press **Configure firewall** in the app to run the firewall check manually.
+
