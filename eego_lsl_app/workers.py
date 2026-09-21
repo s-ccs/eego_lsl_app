@@ -6,6 +6,7 @@ import time
 from dataclasses import dataclass
 
 import grpc
+import numpy as np
 
 import EdigRPC_pb2 as eg
 from edi_sdk import EdiSdk, EdiSdkError, channels_available, nearest_rate, sampling_rates_available
@@ -110,19 +111,16 @@ class StreamWorker(threading.Thread):
 
     def _get_frame(self):
         """Call GetFrame(), tolerating buffer-overflow (sample-loss) errors per the EDI manual.
-
-        The manual states GetFrame() throws if internal buffers overflow -- meaning
-        samples were lost -- from polling too slowly, but the stream itself continues
-        afterward. Only a gRPC transport error is treated as fatal (raised to stop
-        the worker).
         """
         try:
-            return self.device.GetFrame()
-        except grpc.RpcError as exc:
-            raise EdiSdkError(f"gRPC connection error: {exc}") from exc
-        except Exception as exc:
-            self.out_queue.put({"type": "info", "message": f"GetFrame recovered from an error: {exc}"})
-            return None
+             self.device.GetFrame()
+        except:
+            try:
+                self.device.GetFrame()
+            
+            except Exception as exc:
+                self.out_queue.put({"type": "info", "message": f"GetFrame recovered from error: {exc}"})
+                return None
 
     def _run_impedance(self) -> None:
         # SamplingRate is ignored by EDI in impedance mode per the manual.
@@ -185,7 +183,9 @@ class StreamWorker(threading.Thread):
             })
         self.device.SetMode(eg.AmplifierMode_Eeg, sampling_rate, None)
         indices, names, unit_multipliers = self._selected_channels()
-        n_channels = len(names)
+        indices_np = np.asarray(indices, dtype=np.intp)
+        multipliers_np = np.asarray(unit_multipliers, dtype=np.float32)
+        max_index = max(indices) if indices else -1
 
         outlet = None
         trigger_outlet = None
@@ -203,18 +203,18 @@ class StreamWorker(threading.Thread):
             )
         self.out_queue.put({"type": "started", "mode": "eeg", "channels": names})
 
-        # Amplifier-clock-based gap detection: independent of the GetFrame() exception path.
-        expected_next_amp_time: float | None = None
         try:
             while not self.stop_event.is_set():
+                t_get0 = time.perf_counter()
                 resp = self._get_frame()
                 if resp is None:
                     continue
                 for frame in resp.FrameList:
                     # Marker/trigger events now come from the frame directly, not a data channel.
                     for marker in frame.TimeMarkers:
+                        marker_time = marker.Start.seconds + marker.Start.nanos / 1e9
                         if trigger_outlet:
-                            trigger_outlet.push_sample([marker.TimeMarkerCode])
+                            trigger_outlet.push_sample([marker.TimeMarkerCode], marker_time)
                         self.out_queue.put({"type": "trigger", "code": marker.TimeMarkerCode})
 
                     m = frame.Matrix
@@ -222,34 +222,17 @@ class StreamWorker(threading.Thread):
                         continue
 
                     amp_start = frame.Start.seconds + frame.Start.nanos / 1e9
-                    if expected_next_amp_time is not None:
-                        gap = amp_start - expected_next_amp_time
-                        if gap > 1.5 / sampling_rate:
-                            lost = round(gap * sampling_rate)
-                            self.out_queue.put({
-                                "type": "error",
-                                "message": f"Sample loss detected: ~{lost} sample(s) missing (gap {gap * 1000:.1f} ms) based on the amplifier clock.",
-                            })
-                    expected_next_amp_time = amp_start + m.Rows / sampling_rate
 
-                    rows_uv = []
-                    for s in range(m.Rows):
-                        base = s * m.Cols
-                        row = []
-                        for ci, ch_idx in enumerate(indices):
-                            if ch_idx >= m.Cols:
-                                continue
-                            row.append(m.Data[base + ch_idx] * unit_multipliers[ci])
-                        if len(row) == n_channels:
-                            rows_uv.append(row)
-                    if not rows_uv:
+                    if max_index >= m.Cols:
                         continue
+                    matrix = np.asarray(m.Data, dtype=np.float32).reshape(m.Rows, m.Cols)
+                    rows_uv = (matrix[:, indices_np] * multipliers_np)
+
                     if outlet:
                         # push_chunk's single timestamp is the LAST sample's capture time;
                         # LSL derives the rest backward from the nominal sampling rate.
                         last_sample_time = amp_start + (len(rows_uv) - 1) / sampling_rate
                         outlet.push_chunk(rows_uv, last_sample_time)
-                time.sleep(0.005)
         finally:
             self._close_stream_safely()
 

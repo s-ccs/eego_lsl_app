@@ -49,6 +49,9 @@ class EegoLslApp(tk.Tk):
         self.queue: queue.Queue = queue.Queue()
         self.battery_var = tk.StringVar(value="Battery: unavailable")
         self.battery_note = "Battery percentage is not exposed by the bundled eego SDK C wrapper."
+        self.mode_var = tk.StringVar(value="impedance")
+        self._mode_default_bg: str | None = None
+        self._mode_default_active_bg: str | None = None
 
         self._build_ui()
         self.after(250, self._ask_layout_on_start)
@@ -88,19 +91,28 @@ class EegoLslApp(tk.Tk):
         ttk.Label(controls, textvariable=self.amp_label_var, wraplength=420).grid(row=0, column=3, columnspan=3, padx=4, pady=4, sticky=tk.W)
 
         ttk.Label(controls, text="Display / stream").grid(row=1, column=0, padx=(0, 4), pady=4, sticky=tk.E)
-        self.mode_var = tk.StringVar(value="Impedance (kΩ)")
-        self.mode_combo = ttk.Combobox(
-            controls,
-            state="readonly",
-            width=22,
-            textvariable=self.mode_var,
-            values=("Impedance (kΩ)", "EEG activity (µV)"),
+        mode_buttons = ttk.Frame(controls)
+        mode_buttons.grid(row=1, column=1, padx=4, pady=4, sticky=tk.W)
+        self.mode_impedance_btn = tk.Button(
+            mode_buttons,
+            text="Impedance",
+            width=12,
+            command=lambda: self._select_mode("impedance"),
         )
-        self.mode_combo.grid(row=1, column=1, padx=4, pady=4, sticky=tk.W)
-        self.mode_combo.bind("<<ComboboxSelected>>", lambda _event: self._mode_changed())
+        self.mode_impedance_btn.pack(side=tk.LEFT, padx=(0, 6))
+        self.mode_eeg_btn = tk.Button(
+            mode_buttons,
+            text="Activity",
+            width=10,
+            command=lambda: self._select_mode("eeg"),
+        )
+        self.mode_eeg_btn.pack(side=tk.LEFT)
+        self._mode_default_bg = self.mode_impedance_btn.cget("bg")
+        self._mode_default_active_bg = self.mode_impedance_btn.cget("activebackground")
+        self._sync_mode_buttons()
 
         ttk.Label(controls, text="Sampling rate").grid(row=1, column=2, padx=(20, 4), sticky=tk.E)
-        self.sampling_rate_var = tk.StringVar(value="512")
+        self.sampling_rate_var = tk.StringVar(value="1000")
         ttk.Entry(controls, textvariable=self.sampling_rate_var, width=8).grid(row=1, column=3, padx=4, sticky=tk.W)
 
         self.include_bipolar_var = tk.BooleanVar(value=False)
@@ -116,11 +128,10 @@ class EegoLslApp(tk.Tk):
         self.ok_ohm_var = tk.StringVar(value="20")
         self.ok_ohm_entry = ttk.Entry(controls, textvariable=self.ok_ohm_var, width=10)
         self.ok_ohm_entry.grid(row=2, column=3, sticky=tk.W)
-        ttk.Button(controls, text="Apply thresholds", command=self.apply_impedance_thresholds).grid(row=2, column=4, padx=(16, 4), sticky=tk.W)
         self.threshold_note_var = tk.StringVar(value="Bands: <10 kΩ green, 10–20 kΩ yellow, >20 kΩ red")
-        ttk.Label(controls, textvariable=self.threshold_note_var).grid(row=2, column=5, sticky=tk.W)
-        self.good_ohm_entry.bind("<Return>", lambda _event: self.apply_impedance_thresholds())
-        self.ok_ohm_entry.bind("<Return>", lambda _event: self.apply_impedance_thresholds())
+        ttk.Label(controls, textvariable=self.threshold_note_var).grid(row=2, column=4, columnspan=2, sticky=tk.W)
+        self.good_ohm_var.trace_add("write", self._on_threshold_inputs_changed)
+        self.ok_ohm_var.trace_add("write", self._on_threshold_inputs_changed)
 
         ttk.Label(controls, text="Electrode spacing").grid(row=3, column=0, padx=4, sticky=tk.E)
         self.layout_spacing_var = tk.DoubleVar(value=1.0)
@@ -136,7 +147,7 @@ class EegoLslApp(tk.Tk):
 
         actions = ttk.Frame(root)
         actions.pack(fill=tk.X, pady=8)
-        self.start_btn = ttk.Button(actions, text="Start LSL Stream", command=self.start_selected_stream)
+        self.start_btn = ttk.Button(actions, text="Start", command=self.start_selected_stream)
         self.start_btn.pack(side=tk.LEFT, padx=4)
         self.stop_btn = ttk.Button(actions, text="Stop", command=self.stop_stream, state=tk.DISABLED)
         self.stop_btn.pack(side=tk.LEFT, padx=4)
@@ -185,12 +196,32 @@ class EegoLslApp(tk.Tk):
         else:
             self.stream_note_var.set("Selected mode: EEG activity in microvolts. Topomap colours use last impedance values only.")
             self.last_unit = "µV"
+        self._sync_mode_buttons()
         self.last_values.clear()
         self._refresh_table_names()
         self.redraw_layout()
 
+    def _select_mode(self, mode: str):
+        if mode not in {"impedance", "eeg"}:
+            return
+        if self.mode_var.get() == mode:
+            return
+        self.mode_var.set(mode)
+        self._mode_changed()
+
+    def _sync_mode_buttons(self):
+        default_bg = self._mode_default_bg or "SystemButtonFace"
+        default_active_bg = self._mode_default_active_bg or default_bg
+
+        if self.mode_var.get() == "impedance":
+            self.mode_impedance_btn.configure(bg="#f4c542", activebackground="#f4c542", relief=tk.SUNKEN, bd=2)
+            self.mode_eeg_btn.configure(bg=default_bg, activebackground=default_active_bg, relief=tk.RAISED, bd=2)
+        else:
+            self.mode_impedance_btn.configure(bg=default_bg, activebackground=default_active_bg, relief=tk.RAISED, bd=2)
+            self.mode_eeg_btn.configure(bg="#ea9999", activebackground="#ea9999", relief=tk.SUNKEN, bd=2)
+
     def selected_mode(self) -> str:
-        return "eeg" if "µV" in self.mode_var.get() else "impedance"
+        return self.mode_var.get()
 
     def log_msg(self, msg: str):
         self.log.insert(tk.END, msg + "\n")
@@ -292,7 +323,8 @@ class EegoLslApp(tk.Tk):
         self.worker = StreamWorker(mode, config, self.queue)
         self.worker.start()
         self.start_btn.configure(state=tk.DISABLED)
-        self.mode_combo.configure(state=tk.DISABLED)
+        self.mode_impedance_btn.configure(state=tk.DISABLED)
+        self.mode_eeg_btn.configure(state=tk.DISABLED)
         self.stop_btn.configure(state=tk.NORMAL)
         self.status_var.set(f"Starting {self._mode_label(mode)} LSL stream...")
 
@@ -310,7 +342,8 @@ class EegoLslApp(tk.Tk):
             return
         self.worker = None
         self.start_btn.configure(state=tk.NORMAL)
-        self.mode_combo.configure(state="readonly")
+        self.mode_impedance_btn.configure(state=tk.NORMAL)
+        self.mode_eeg_btn.configure(state=tk.NORMAL)
         self.stop_btn.configure(state=tk.DISABLED)
         self.status_var.set("Stopped. Stream closed.")
 
@@ -343,7 +376,8 @@ class EegoLslApp(tk.Tk):
         elif typ == "stopped":
             self.worker = None
             self.start_btn.configure(state=tk.NORMAL)
-            self.mode_combo.configure(state="readonly")
+            self.mode_impedance_btn.configure(state=tk.NORMAL)
+            self.mode_eeg_btn.configure(state=tk.NORMAL)
             self.stop_btn.configure(state=tk.DISABLED)
             self.status_var.set("Stopped. Stream closed.")
             self.log_msg("Stream stopped and SDK stream closed.")
@@ -531,6 +565,22 @@ class EegoLslApp(tk.Tk):
         good, ok = self._validate_thresholds(show_error=True)
         self.good_ohm_var.set(f"{good:g}")
         self.ok_ohm_var.set(f"{ok:g}")
+        self.threshold_note_var.set(f"Bands: <{good:g} kΩ green, {good:g}–{ok:g} kΩ yellow, >{ok:g} kΩ red")
+        self.redraw_layout()
+        if self.last_unit == "kΩ":
+            for name, value in list(self.last_impedance_values.items()):
+                if self.table.exists(name):
+                    status = self._impedance_status(value)
+                    self.table.item(name, values=(name, f"{value:.1f} kΩ", status))
+
+    def _on_threshold_inputs_changed(self, *_args):
+        try:
+            good = float(self.good_ohm_var.get().replace(",", "."))
+            ok = float(self.ok_ohm_var.get().replace(",", "."))
+        except Exception:
+            return
+        if good < 0 or ok < 0 or good >= ok:
+            return
         self.threshold_note_var.set(f"Bands: <{good:g} kΩ green, {good:g}–{ok:g} kΩ yellow, >{ok:g} kΩ red")
         self.redraw_layout()
         if self.last_unit == "kΩ":
