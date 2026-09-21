@@ -1,3 +1,4 @@
+
 Tkinter-based Python app for ANT eego amplifiers.
 
 It can:
@@ -15,16 +16,22 @@ This app talks to an **EdigRPC (EDI 2.0) server** over gRPC -- it no longer load
 directly. Start the EDI gRPC server (EdigRPCApp / EDX-Service-TinyUI) first, then run this app;
 by default it connects to `localhost:3390` (configurable in the GUI).
 
+
+
+## Install
+Be sure to have installed `python3-tk`
+
+then clone and run
 ```bat
-py -3.13 -m pip install -r requirements.txt
+uv init
+
 ```
 
 ## Run
 
 ```bat
-py -3.13 app.py
+uv run app.y
 ```
-
 ## Impedance colour scale
 
 The topomap uses three adjustable impedance bands. The defaults are:
@@ -51,12 +58,13 @@ Pressing **Stop** now requests a full SDK stream close, which should also releas
 
 ## Notes
 
-- The amplifier's SDK typically permits only one active mode at a time, so impedance and EEG are treated as mutually exclusive.
-- EEG values are converted to microvolts before LSL streaming based on each channel's reported unit.
 - "Detect amplifier" always cascades every device the server reports into a single stream (never a user-selected subset).
 - If the app cannot connect, make sure the EdigRPC server is running and reachable at the configured address.
 
-The app now checks on startup whether Windows Firewall rules exist for the program. If no rule is found, it asks whether to add inbound and outbound allow-rules for Private/Domain networks.
+- EEG values are assumed to come from the SDK in volts and are converted to microvolts before display/LSL streaming.
+
+## Windows Firewall
+The app checks on startup whether Windows Firewall rules exist for the program. If no rule is found, it asks whether to add inbound and outbound allow-rules for Private/Domain networks.
 
 Important details:
 
@@ -65,3 +73,4 @@ Important details:
 - The rules do not guarantee LSL visibility if the network itself blocks multicast/broadcast discovery, if the network profile is Public, if a VPN is active, or if a university/router firewall isolates devices.
 
 You can also press **Configure firewall** in the app to run the firewall check manually.
+
