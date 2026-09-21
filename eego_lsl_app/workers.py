@@ -113,12 +113,10 @@ class StreamWorker(threading.Thread):
         """Call GetFrame(), tolerating buffer-overflow (sample-loss) errors per the EDI manual.
         """
         try:
-             self.device.GetFrame()
-        except:
-            try:
-                self.device.GetFrame()
+             return self.device.GetFrame()
+        
             
-            except Exception as exc:
+        except Exception as exc:
                 self.out_queue.put({"type": "info", "message": f"GetFrame recovered from error: {exc}"})
                 return None
 
@@ -208,6 +206,8 @@ class StreamWorker(threading.Thread):
                 t_get0 = time.perf_counter()
                 resp = self._get_frame()
                 if resp is None:
+                    self.out_queue.put({"type": "info",  "message": "GetFrame2 returned None; skipping this iteration."})
+
                     continue
                 for frame in resp.FrameList:
                     # Marker/trigger events now come from the frame directly, not a data channel.
@@ -223,8 +223,8 @@ class StreamWorker(threading.Thread):
 
                     amp_start = frame.Start.seconds + frame.Start.nanos / 1e9
 
-                    if max_index >= m.Cols:
-                        continue
+                    #if max_index >= m.Cols:
+                    #    continue
                     matrix = np.asarray(m.Data, dtype=np.float32).reshape(m.Rows, m.Cols)
                     rows_uv = (matrix[:, indices_np] * multipliers_np)
 
@@ -233,6 +233,12 @@ class StreamWorker(threading.Thread):
                         # LSL derives the rest backward from the nominal sampling rate.
                         last_sample_time = amp_start + (len(rows_uv) - 1) / sampling_rate
                         outlet.push_chunk(rows_uv, last_sample_time)
+
+                    toc = time.perf_counter() - t_get0
+                    self.out_queue.put({"type": "info", "message": "%0.3f seconds, %s samples" % (toc, rows_uv.shape)})
+
+                time.sleep(0.001)
+
         finally:
             self._close_stream_safely()
 

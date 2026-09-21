@@ -63,8 +63,8 @@ class Device:
         ActiveChannels = list(range(len(self.GetChannelsAvailable().ChannelList))),
         Ranges = ranges,
         SamplingRate = rate,
-        BufferSize = int(rate),
-        DataReadyPercentage = 10,
+        BufferSize = 10_000,
+        DataReadyPercentage = 1,
       ),
       #StimParams=stim_params
     ))
