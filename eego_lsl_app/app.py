@@ -10,6 +10,7 @@ from tkinter import filedialog, messagebox, ttk
 from edi_sdk import DEFAULT_CHANNEL_ADDRESS, EdiSdk, EdiSdkError, channels_available, sampling_rates_available
 from layout import Electrode, auxiliary_contacts, impedance_contacts, load_layout, normalize_to_canvas, reference_electrodes
 from workers import StreamWorker, WorkerConfig
+from cli_presets import CliPresets, parse_presets
 from firewall import add_firewall_rules, ensure_firewall_rule_interactive
 
 GREEN = "#35c46f"
@@ -23,12 +24,13 @@ ELECTRODE_OUTLINE = "#4f5b62"
 
 
 class EegoLslApp(tk.Tk):
-    def __init__(self):
+    def __init__(self, presets: CliPresets | None = None):
         super().__init__()
         self.title("eego LSL: Impedance + EEG v25")
         self.geometry("1160x780")
         self.minsize(1020, 680)
 
+        self.presets = presets or CliPresets()
         self.layout_path: Path | None = None
         self.electrodes: list[Electrode] = []
         self.electrode_items: dict[str, int] = {}
@@ -37,6 +39,12 @@ class EegoLslApp(tk.Tk):
         # EOG is also Ref 32 in the main layout, so it needs its own aux item.
         self.aux_icon_items: dict[str, int] = {}
         self.aux_icon_text_items: dict[str, int] = {}
+        # Reverse lookup used by hover-highlighting to map a canvas item id back to an electrode name.
+        self._canvas_item_names: dict[int, str] = {}
+        self._hovered_name: str | None = None
+        self._fullscreen_win: tk.Toplevel | None = None
+        self._main_canvas: tk.Canvas | None = None
+        self._canvas_home: ttk.Frame | None = None
         # Auxiliary contacts shown in the upper-left of the topomap for 64-channel caps.
         # These are not part of the 64 EEG reference channels; they are display/status contacts.
         self.aux_channel_names = ["EOG", "REF", "GND"]
@@ -54,9 +62,40 @@ class EegoLslApp(tk.Tk):
         self._mode_default_active_bg: str | None = None
 
         self._build_ui()
-        self.after(250, self._ask_layout_on_start)
+        self._apply_cli_presets()
+        if self.layout_path is None:
+            self.after(250, self._ask_layout_on_start)
         self.after(700, self._ensure_firewall_on_startup)
         self.after(100, self._poll_worker_queue)
+
+    def _apply_cli_presets(self):
+        """Apply the four CLI presets to the GUI state before first use."""
+        p = self.presets
+        if p.include_aux is not None:
+            self.include_aux_var.set(p.include_aux)
+        if p.include_bipolar is not None:
+            self.include_bipolar_var.set(p.include_bipolar)
+        if p.sampling_rate is not None:
+            self.sampling_rate_var.set(str(p.sampling_rate))
+        if p.layout_path is not None:
+            self._load_layout_from_path(p.layout_path)
+
+    def _load_layout_from_path(self, path: Path):
+        """Load a layout file directly (used by the CLI preset)."""
+        try:
+            self.electrodes = load_layout(path)
+            self.layout_path = Path(path)
+            self.last_values.clear()
+            self.last_impedance_values.clear()
+            n_ref = len(reference_electrodes(self.electrodes))
+            n_aux = len(auxiliary_contacts(self.electrodes))
+            self.layout_label.configure(text=f"{self.layout_path.name} ({n_ref} EEG + {n_aux} aux contacts)")
+            self.status_var.set("Layout loaded (CLI preset). Detect amplifier next.")
+            self.redraw_layout()
+            self._refresh_table_names()
+        except Exception as exc:
+            self.log_msg(f"ERROR: could not load preset layout {path}: {exc}")
+            messagebox.showerror("Layout error", str(exc))
 
     def _ensure_firewall_on_startup(self):
         ensure_firewall_rule_interactive(self)
@@ -165,10 +204,17 @@ class EegoLslApp(tk.Tk):
         right = ttk.Frame(body)
         body.add(left, weight=3)
         body.add(right, weight=1)
+        self._canvas_home = left
+
+        canvas_toolbar = ttk.Frame(left)
+        canvas_toolbar.pack(fill=tk.X)
+        self.fullscreen_btn = ttk.Button(canvas_toolbar, text="\u26f6 Fullscreen", command=self.toggle_topoplot_fullscreen)
+        self.fullscreen_btn.pack(side=tk.RIGHT, padx=2, pady=(0, 4))
 
         self.canvas = tk.Canvas(left, bg=CANVAS_BG, highlightthickness=1, highlightbackground="#dfe5ea")
         self.canvas.pack(fill=tk.BOTH, expand=True)
-        self.canvas.bind("<Configure>", lambda event: self.redraw_layout())
+        self._bind_canvas_events(self.canvas)
+        self._main_canvas = self.canvas
 
         ttk.Label(right, text="Live values").pack(anchor=tk.W)
         cols = ("electrode", "value", "status")
@@ -391,6 +437,8 @@ class EegoLslApp(tk.Tk):
         self.electrode_text_items.clear()
         self.aux_icon_items.clear()
         self.aux_icon_text_items.clear()
+        self._canvas_item_names.clear()
+        self._hovered_name = None
         if not self.electrodes:
             self.canvas.create_text(24, 24, anchor=tk.NW, text="No layout loaded", fill=GRAY, font=("Segoe UI", 11))
             return
@@ -417,7 +465,7 @@ class EegoLslApp(tk.Tk):
 
         n = len(display_electrodes)
         r = 17 if n <= 70 else 13
-        font_size = 8 if n > 70 else 9
+        font_size = 10 if n > 70 else 12
 
         # Draw in two passes so labels sit cleanly above all electrode circles.
         # IMPORTANT: electrode colour is based only on the last impedance value.
@@ -435,10 +483,11 @@ class EegoLslApp(tk.Tk):
                 width=1,
             )
             self.electrode_items[e.name] = item
+            self._canvas_item_names[item] = e.name
 
         for e in display_electrodes:
             x, y = coords[e.name]
-            txt = self.canvas.create_text(x, y, text=e.name, fill=DARK, font=("Segoe UI", font_size))
+            txt = self.canvas.create_text(x, y, text=e.name, fill=DARK, font=("Segoe UI", font_size, "bold"))
             self.electrode_text_items[e.name] = txt
 
 
@@ -504,8 +553,9 @@ class EegoLslApp(tk.Tk):
             # essential for EOG, which is also a normal referential channel
             # in the Appendix-A order.
             self.aux_icon_items[name] = item
+            self._canvas_item_names[item] = name
             self.aux_icon_text_items[name] = self.canvas.create_text(
-                x, y, text=name, fill=DARK, font=("Segoe UI", 8, "bold"),
+                x, y, text=name, fill=DARK, font=("Segoe UI", 10, "bold"),
             )
 
     def _refresh_table_names(self):
@@ -610,6 +660,74 @@ class EegoLslApp(tk.Tk):
     def _impedance_color_for_name(self, name: str) -> str:
         return self._impedance_color(self.last_impedance_values.get(name))
 
+    def _bind_canvas_events(self, canvas: tk.Canvas):
+        canvas.bind("<Configure>", lambda event: self.redraw_layout())
+        canvas.bind("<Motion>", self._on_canvas_motion)
+        canvas.bind("<Leave>", lambda event: self._clear_hover())
+
+    def _on_canvas_motion(self, event: tk.Event):
+        items = self.canvas.find_overlapping(event.x - 1, event.y - 1, event.x + 1, event.y + 1)
+        name = next((self._canvas_item_names[item] for item in items if item in self._canvas_item_names), None)
+        if name == self._hovered_name:
+            return
+        self._clear_hover()
+        if name is not None:
+            self._set_hover_text(name)
+        self._hovered_name = name
+
+    def _clear_hover(self):
+        if self._hovered_name is None:
+            return
+        text_item = self.electrode_text_items.get(self._hovered_name) or self.aux_icon_text_items.get(self._hovered_name)
+        if text_item is not None:
+            self.canvas.itemconfigure(text_item, text=self._hovered_name)
+        self._hovered_name = None
+
+    def _set_hover_text(self, name: str):
+        # Show the live impedance value in place of the electrode label while hovering.
+        text_item = self.electrode_text_items.get(name) or self.aux_icon_text_items.get(name)
+        if text_item is None:
+            return
+        value = self.last_impedance_values.get(name)
+        label = f"{value:.1f}" if value is not None else "—"
+        self.canvas.itemconfigure(text_item, text=label)
+
+    def toggle_topoplot_fullscreen(self):
+        """Show the topoplot on its own canvas in a maximized Toplevel window, or restore it."""
+        if self._fullscreen_win is None:
+            win = tk.Toplevel(self)
+            win.title("Impedance topoplot - fullscreen")
+            try:
+                win.state("zoomed")
+            except tk.TclError:
+                win.attributes("-fullscreen", True)
+            bar = ttk.Frame(win)
+            bar.pack(fill=tk.X)
+            ttk.Button(bar, text="Exit fullscreen", command=self.toggle_topoplot_fullscreen).pack(side=tk.RIGHT, padx=6, pady=6)
+            content = ttk.Frame(win)
+            content.pack(fill=tk.BOTH, expand=True)
+            win.protocol("WM_DELETE_WINDOW", self.toggle_topoplot_fullscreen)
+            win.bind("<Escape>", lambda _event: self.toggle_topoplot_fullscreen())
+
+            fs_canvas = tk.Canvas(content, bg=CANVAS_BG, highlightthickness=1, highlightbackground="#dfe5ea")
+            fs_canvas.pack(fill=tk.BOTH, expand=True)
+            self._bind_canvas_events(fs_canvas)
+
+            self._clear_hover()
+            self._main_canvas.pack_forget()
+            self.canvas = fs_canvas
+            self.fullscreen_btn.configure(text="\u26f6 Exit fullscreen")
+            self._fullscreen_win = win
+        else:
+            win = self._fullscreen_win
+            self._fullscreen_win = None
+            self._clear_hover()
+            self.canvas = self._main_canvas
+            self._main_canvas.pack(fill=tk.BOTH, expand=True)
+            self.fullscreen_btn.configure(text="\u26f6 Fullscreen")
+            win.destroy()
+        self.after(50, self.redraw_layout)
+
 
 def main():
     if "--add-firewall-rule" in sys.argv:
@@ -626,7 +744,7 @@ def main():
         root.destroy()
         return
 
-    app = EegoLslApp()
+    app = EegoLslApp(parse_presets())
     app.mainloop()
 
 

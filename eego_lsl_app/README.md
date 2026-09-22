@@ -32,6 +32,23 @@ uv init
 ```bat
 uv run app.y
 ```
+
+## CLI presets
+
+A few settings can be preset on the command line so they do not have to be
+ticked in the GUI every time:
+
+```bat
+uv run app.py --aux --no-bip --layout capfiles/64ch.txt --sampling-rate 500
+```
+
+- `--aux` / `--no-aux` — include Aux channels (yes/no)
+- `--bip` / `--no-bip` — include Bipolar channels (yes/no)
+- `--layout PATH` — electrode layout file to load at startup (skips the startup dialog)
+- `--sampling-rate HZ` — sampling rate in Hz
+
+Any option that is omitted keeps the GUI default. Everything else (server
+address, thresholds, mode) stays in the GUI.
 ## Impedance colour scale
 
 The topomap uses three adjustable impedance bands. The defaults are:
