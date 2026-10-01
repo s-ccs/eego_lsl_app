@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import queue
 import statistics
 import sys
@@ -8,6 +9,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from edi_sdk import DEFAULT_CHANNEL_ADDRESS, EdiSdk, EdiSdkError, channels_available, sampling_rates_available
+from edx_service import DEFAULT_EDX_SERVICE_ADDRESS, is_edx_service_running, start_edx_service, stop_edx_service, wait_for_edx_service
 from layout import Electrode, auxiliary_contacts, impedance_contacts, load_layout, normalize_to_canvas, reference_electrodes
 from workers import StreamWorker, WorkerConfig
 from cli_presets import CliPresets, parse_presets
@@ -45,6 +47,8 @@ class EegoLslApp(tk.Tk):
         self._fullscreen_win: tk.Toplevel | None = None
         self._main_canvas: tk.Canvas | None = None
         self._canvas_home: ttk.Frame | None = None
+        self.edx_service_process = None
+        self._edx_service_started_by_app = False
         # Auxiliary contacts shown in the upper-left of the topomap for 64-channel caps.
         # These are not part of the 64 EEG reference channels; they are display/status contacts.
         self.aux_channel_names = ["EOG", "REF", "GND"]
@@ -60,9 +64,13 @@ class EegoLslApp(tk.Tk):
         self.mode_var = tk.StringVar(value="impedance")
         self._mode_default_bg: str | None = None
         self._mode_default_active_bg: str | None = None
+        self._closing = False
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
+        atexit.register(self._cleanup_edx_service)
 
         self._build_ui()
         self._apply_cli_presets()
+        self.after(150, self._ensure_edx_service_on_startup)
         if self.layout_path is None:
             self.after(250, self._ask_layout_on_start)
         self.after(700, self._ensure_firewall_on_startup)
@@ -114,6 +122,9 @@ class EegoLslApp(tk.Tk):
         ttk.Button(top, text="Configure firewall", command=self.configure_firewall).pack(side=tk.LEFT, padx=(8, 0))
         self.layout_label = ttk.Label(top, text="No layout loaded")
         self.layout_label.pack(side=tk.LEFT, padx=8)
+        self.service_status_var = tk.StringVar(value="EDX service: checking...")
+        self.edx_status_label = tk.Label(top, textvariable=self.service_status_var, foreground=GRAY)
+        self.edx_status_label.pack(side=tk.RIGHT, padx=(8, 0))
         ttk.Label(top, textvariable=self.battery_var, foreground="#7a858c").pack(side=tk.RIGHT, padx=(8, 0))
 
         ttk.Separator(root).pack(fill=tk.X, pady=8)
@@ -121,13 +132,10 @@ class EegoLslApp(tk.Tk):
         controls = ttk.Frame(root)
         controls.pack(fill=tk.X)
 
-        ttk.Label(controls, text="Server address").grid(row=0, column=0, padx=4, pady=4, sticky=tk.E)
-        self.server_address_var = tk.StringVar(value=DEFAULT_CHANNEL_ADDRESS)
-        ttk.Entry(controls, textvariable=self.server_address_var, width=20).grid(row=0, column=1, padx=4, pady=4, sticky=tk.W)
-        ttk.Button(controls, text="Detect amplifier", command=self.detect_amplifiers).grid(row=0, column=2, padx=4, pady=4)
+        ttk.Button(controls, text="Detect amplifier", command=self.detect_amplifiers).grid(row=0, column=0, padx=4, pady=4, sticky=tk.W)
         self.amp_label_var = tk.StringVar(value="No amplifier detected")
         # Own row + wraplength so a long/concatenated serial list can never push later rows' columns.
-        ttk.Label(controls, textvariable=self.amp_label_var, wraplength=420).grid(row=0, column=3, columnspan=3, padx=4, pady=4, sticky=tk.W)
+        ttk.Label(controls, textvariable=self.amp_label_var, wraplength=420).grid(row=0, column=1, columnspan=3, padx=4, pady=4, sticky=tk.W)
 
         ttk.Label(controls, text="Display / stream").grid(row=1, column=0, padx=(0, 4), pady=4, sticky=tk.E)
         mode_buttons = ttk.Frame(controls)
@@ -216,9 +224,20 @@ class EegoLslApp(tk.Tk):
         self._bind_canvas_events(self.canvas)
         self._main_canvas = self.canvas
 
-        ttk.Label(right, text="Live values").pack(anchor=tk.W)
+        notebook = ttk.Notebook(right)
+        notebook.pack(fill=tk.BOTH, expand=True)
+
+        overview_tab = ttk.Frame(notebook)
+        notebook.add(overview_tab, text="Overview")
+
+        overview_pane = ttk.PanedWindow(overview_tab, orient=tk.VERTICAL)
+        overview_pane.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+
+        values_frame = ttk.Frame(overview_pane)
+        overview_pane.add(values_frame, weight=3)
+        ttk.Label(values_frame, text="Live values").pack(anchor=tk.W)
         cols = ("electrode", "value", "status")
-        self.table = ttk.Treeview(right, columns=cols, show="headings", height=16)
+        self.table = ttk.Treeview(values_frame, columns=cols, show="headings", height=16)
         for col in cols:
             self.table.heading(col, text=col.capitalize())
         self.table.column("electrode", width=90)
@@ -226,14 +245,89 @@ class EegoLslApp(tk.Tk):
         self.table.column("status", width=90)
         self.table.pack(fill=tk.BOTH, expand=True)
 
-        ttk.Label(right, text="Messages / errors").pack(anchor=tk.W, pady=(8, 0))
-        self.log = tk.Text(right, height=14, wrap=tk.WORD)
-        self.log.pack(fill=tk.BOTH, expand=False, pady=(2, 0))
+        messages_frame = ttk.Frame(overview_pane)
+        overview_pane.add(messages_frame, weight=2)
+        ttk.Label(messages_frame, text="Messages / errors").pack(anchor=tk.W, pady=(8, 0))
+        self.log = tk.Text(messages_frame, height=14, wrap=tk.WORD)
+        self.log.pack(fill=tk.BOTH, expand=True, pady=(2, 0))
+
+        service_tab = ttk.Frame(notebook)
+        notebook.add(service_tab, text="EDX Service")
+        self.edx_log = tk.Text(service_tab, height=16, wrap=tk.WORD, bg="#0f172a", fg="#dfe7f3", insertbackground="white", font=("Consolas", 10))
+        self.edx_log.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+        self.edx_log.insert(tk.END, "EDX service log is empty. The app will start it automatically when needed.\n")
+        self.edx_log.see(tk.END)
+
+    def on_close(self):
+        self._cleanup_edx_service()
+        self.destroy()
+
+    def _cleanup_edx_service(self):
+        if self._closing:
+            return
+        self._closing = True
+
+        if self.worker and self.worker.is_alive():
+            try:
+                self.worker.stop()
+            except Exception:
+                pass
+
+        if self._edx_service_started_by_app and self.edx_service_process is not None:
+            try:
+                stop_edx_service(self.edx_service_process)
+            except Exception:
+                pass
+            self.edx_service_process = None
+            self._edx_service_started_by_app = False
 
     def _ask_layout_on_start(self):
         answer = messagebox.askyesno("Electrode layout", "Load an electrode layout before using the app?")
         if answer:
             self.load_layout_dialog()
+
+    def _append_edx_log(self, line: str):
+        if not line:
+            return
+        if not hasattr(self, "edx_log"):
+            return
+        self.edx_log.insert(tk.END, line + "\n")
+        self.edx_log.see(tk.END)
+
+    def _ensure_edx_service_on_startup(self):
+        if is_edx_service_running(DEFAULT_EDX_SERVICE_ADDRESS):
+            self.edx_status_label.configure(fg=GREEN)
+            self.service_status_var.set("EDX service: running on localhost:3390")
+            self._append_edx_log("INFO: EDX service already running.")
+            return True
+
+        self.edx_status_label.configure(fg=YELLOW)
+        self.service_status_var.set("EDX service: starting...")
+        try:
+            self.edx_service_process = start_edx_service(self._append_edx_log)
+            if self.edx_service_process is not None:
+                self._edx_service_started_by_app = True
+                self.edx_status_label.configure(fg=YELLOW)
+                self.service_status_var.set("EDX service: starting...")
+            if wait_for_edx_service(DEFAULT_EDX_SERVICE_ADDRESS, timeout=12.0):
+                self.edx_status_label.configure(fg=GREEN)
+                self.service_status_var.set("EDX service: running on localhost:3390")
+                self.log_msg("INFO: EDX service started automatically on localhost:3390.")
+                return True
+            self.edx_status_label.configure(fg=RED)
+            self.service_status_var.set("EDX service: unavailable")
+            self.log_msg("ERROR: EDX service did not become ready on localhost:3390.")
+            return False
+        except FileNotFoundError as exc:
+            self.edx_status_label.configure(fg=RED)
+            self.service_status_var.set("EDX service: not found")
+            self.log_msg(f"ERROR: EDX service not found: {exc}")
+            return False
+        except Exception as exc:
+            self.edx_status_label.configure(fg=RED)
+            self.service_status_var.set("EDX service: failed to start")
+            self.log_msg(f"ERROR: could not start EDX service: {exc}")
+            return False
 
     def _mode_changed(self):
         if self.selected_mode() == "impedance":
@@ -296,7 +390,11 @@ class EegoLslApp(tk.Tk):
             messagebox.showerror("Layout error", str(exc))
 
     def detect_amplifiers(self):
-        address = self.server_address_var.get().strip() or DEFAULT_CHANNEL_ADDRESS
+        if not self._ensure_edx_service_on_startup():
+            messagebox.showerror("EdigRPC error", "The EDX service on localhost:3390 could not be started.")
+            self.status_var.set("Could not connect to the EdigRPC server or detect amplifiers.")
+            return
+        address = DEFAULT_CHANNEL_ADDRESS
         try:
             sdk = EdiSdk(address)
             devices = sdk.list_devices()
@@ -337,7 +435,7 @@ class EegoLslApp(tk.Tk):
             raise RuntimeError("The selected layout contains no regular EEG reference electrodes.")
         serial = "+".join(d.Serial or d.Key for d in self.devices)
         return WorkerConfig(
-            channel_address=self.server_address_var.get().strip() or DEFAULT_CHANNEL_ADDRESS,
+            channel_address=DEFAULT_CHANNEL_ADDRESS,
             serial=serial,
             channel_names=[e.name for e in refs],
             sampling_rate=int(self.sampling_rate_var.get()),

@@ -16,15 +16,18 @@ device = sdk.create_device(devices)
 referential = [c for c in channels_available(device) if c.is_referential]
 print(f"Streaming impedance for {len(referential)} referential channel(s) from {[d.Serial for d in devices]}")
 
-device.SetMode(eg.AmplifierMode_Impedance, 0, None)
+device.SetMode(eg.AmplifierMode_Impedance, 1000, None)
+
+
+
 try:
     while True:
         for frame in device.GetFrame().FrameList:
             if frame.HasField("Impedance"):
                 # Per the EDI manual, this only arrives roughly once every 1-2s.
-                print("Impedance (ohm):", list(frame.Impedance.Channels)[:10], "...")
+                print("Impedance (ohm):", list(frame.Impedance.Channels)[0:10], "...")
         time.sleep(0.1)
 except KeyboardInterrupt:
     pass
 finally:
-    device.SetMode(eg.AmplifierMode_Idle, 0, None)
+    device.SetMode(eg.AmplifierMode_Idle,1000, None)
