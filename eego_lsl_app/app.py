@@ -678,6 +678,10 @@ class EegoLslApp(tk.Tk):
                 self.canvas.itemconfigure(self.electrode_items[name], fill=self._impedance_color(v))
             if name in self.aux_icon_items:
                 self.canvas.itemconfigure(self.aux_icon_items[name], fill=self._impedance_color(v))
+            # If this electrode is currently hovered, its label shows the live
+            # value instead of the name, so refresh it with the new value.
+            if name == self._hovered_name:
+                self._set_hover_text(name)
             status = self._impedance_status(v)
             if self.table.exists(name):
                 self.table.item(name, values=(name, f"{v:.1f} kΩ", status))

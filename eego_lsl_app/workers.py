@@ -143,7 +143,9 @@ class StreamWorker(threading.Thread):
                     if not frame.HasField("Impedance"):
                         continue
                     imp = frame.Impedance
-                    channel_ohm = list(imp.Channels)
+                    channel_ohm = imp.Channels[1::2]
+                    self.out_queue.put({"type": "info", "message": f"impedances subset: {len(channel_ohm)}"})
+
                     if not channel_ohm:
                         continue
                     electrode_ohm = [channel_ohm[i] for i in indices if i < len(channel_ohm)]
