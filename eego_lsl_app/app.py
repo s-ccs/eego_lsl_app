@@ -517,6 +517,9 @@ class EegoLslApp(tk.Tk):
         elif typ == "error":
             self.log_msg("ERROR: " + msg.get("message", "unknown error"))
             messagebox.showerror("Stream error", msg.get("message", "unknown error"))
+        elif typ == "warn":
+            self.log_msg("WARN: " + msg.get("message", ""))
+            self.status_var.set(msg.get("message", ""))
         elif typ == "stopped":
             self.worker = None
             self.start_btn.configure(state=tk.NORMAL)

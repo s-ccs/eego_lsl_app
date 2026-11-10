@@ -11,7 +11,7 @@ import numpy as np
 import EdigRPC_pb2 as eg
 from edi_sdk import EdiSdk, EdiSdkError, channels_available, nearest_rate, sampling_rates_available
 from lsl_streams import make_marker_outlet, make_outlet
-
+import pylsl
 
 @dataclass
 class WorkerConfig:
@@ -117,7 +117,7 @@ class StreamWorker(threading.Thread):
         
             
         except Exception as exc:
-                self.out_queue.put({"type": "info", "message": f"GetFrame recovered from error: {exc}"})
+                self.out_queue.put({"type": "warn", "message": f"GetFrame recovered from error: {exc}"})
                 return None
 
     def _run_impedance(self) -> None:
@@ -214,7 +214,7 @@ class StreamWorker(threading.Thread):
                 for frame in resp.FrameList:
                     # Marker/trigger events now come from the frame directly, not a data channel.
                     for marker in frame.TimeMarkers:
-                        marker_time = marker.Start.seconds + marker.Start.nanos / 1e9
+                        marker_time = pylsl.local_clock()   #not needed for our setup tho?
                         if trigger_outlet:
                             trigger_outlet.push_sample([marker.TimeMarkerCode], marker_time)
                         self.out_queue.put({"type": "trigger", "code": marker.TimeMarkerCode})
@@ -223,7 +223,8 @@ class StreamWorker(threading.Thread):
                     if not m.Data or m.Cols <= 0 or m.Rows <= 0:
                         continue
 
-                    amp_start = frame.Start.seconds + frame.Start.nanos / 1e9
+                    # wrong unix time system
+                    #amp_start = frame.Start.seconds + frame.Start.nanos / 1e9
 
                     #if max_index >= m.Cols:
                     #    continue
@@ -233,11 +234,12 @@ class StreamWorker(threading.Thread):
                     if outlet:
                         # push_chunk's single timestamp is the LAST sample's capture time;
                         # LSL derives the rest backward from the nominal sampling rate.
-                        last_sample_time = amp_start + (len(rows_uv) - 1) / sampling_rate
+                        #last_sample_time = amp_start + (len(rows_uv) - 1) / sampling_rate
+                        last_sample_time = pylsl.local_clock()
                         outlet.push_chunk(rows_uv, last_sample_time)
 
                     toc = time.perf_counter() - t_get0
-                    self.out_queue.put({"type": "info", "message": "%0.3f seconds, %s samples" % (toc, rows_uv.shape)})
+                    #self.out_queue.put({"type": "info", "message": "%0.3f seconds, %s samples" % (toc, rows_uv.shape)})
 
                 time.sleep(0.001)
 
